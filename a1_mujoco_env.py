@@ -148,7 +148,6 @@ class A1MujocoEnv(MujocoEnv):
 
         observation = self._get_obs()
         reward, reward_info = self._calc_reward(action)
-        # TODO: Consider terminating if knees touch the ground
         terminated = not self.is_healthy
         truncated = self._step >= (self._max_episode_time_sec / self.dt)
         info = {
@@ -311,9 +310,6 @@ class A1MujocoEnv(MujocoEnv):
         return self._curriculum_base**0.997
 
     def _calc_reward(self, action):
-        # TODO: Add debug mode with custom Tensorboard calls for individual reward
-        #   functions to get a better sense of the contribution of each reward function
-        # TODO: Cost for thigh or calf contact with the ground
 
         # Positive Rewards
         linear_vel_tracking_reward = (
