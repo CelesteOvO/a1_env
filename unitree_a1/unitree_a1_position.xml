@@ -6,9 +6,9 @@
   <default>
     <default class="a1">
       <geom friction="0.6" margin="0.001"/>
-      <joint axis="0 1 0" damping="2" armature="0.01" frictionloss="0.2"/>
+      <joint axis="0 1 0" damping="1.0" armature="0.01" frictionloss="0.1"/>
      <!--position kp="300"250,2.4,3 forcerange="-33.5 33.5" 300 4 best for correct freq./-->
-      <position kp="100" forcerange="-33.5 33.5" ctrllimited="true"/>
+      <position kp="20" forcerange="-23.7 23.7" ctrllimited="true"/>
 
       <default class="abduction">
         <joint axis="1 0 0" range="-0.802851 0.802851" damping="1"/>
@@ -50,7 +50,7 @@
         </default>
         <default class="foot">
           <geom type="sphere" size="0.02" pos="0 0 -0.2" priority="1" solimp="0.015 1 0.031"
-              condim="6" friction="0.8 0.02 0.01"/>
+              condim="6" friction="0.6 0.02 0.01"/>
         </default>
       </default>
     </default>

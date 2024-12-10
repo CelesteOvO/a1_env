@@ -8,7 +8,8 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.env_util import make_vec_env
-from a1_mujoco_env import A1MujocoEnv
+from test.a1_mujoco_env_new import A1MujocoEnv
+from a1_real_env import A1RealEnv
 from tqdm import tqdm
 
 MODEL_DIR = "models"
@@ -53,6 +54,7 @@ def train(args):
         )
     else:
         # Default PPO model hyper-parameters give good results
+        # TODO: Use dynamic learning rate
         model = PPO("MlpPolicy", vec_env, verbose=1, tensorboard_log=LOG_DIR)
 
     model.learn(
@@ -121,10 +123,45 @@ def test(args):
         f"Avg episode reward: {total_reward / num_episodes}, avg episode length: {total_length / num_episodes}"
     )
 
+def test_real(args):
+    # 创建实际环境
+    env = A1RealEnv()
+
+    # 加载模型
+    model_path = Path(args.model_path)
+    if not model_path.exists():
+        raise ValueError(f"Model path {model_path} does not exist!")
+
+    model = PPO.load(path=model_path, env=env, verbose=1)
+
+    # 让机器人进入站立状态
+    env.robot.stand_up(standup_time=1.5, reset_time=5)
+    # 如果需要初始化观测值，调用 reset()
+    obs, _ = env.reset()
+
+    max_episode_length = 20.0 / 0.002  # 20s
+    max_steps = 10 * int(max_episode_length)  # 根据模拟环境中的逻辑计算
+
+    try:
+        for i in range(max_steps):
+            start_time = time.time()
+            # 根据策略生成动作
+            action, _ = model.predict(obs, deterministic=True)
+
+            # 将动作应用到环境，并获取新状态
+            obs = env.step(action)
+
+            print("policy step time (ms): ", (time.time() - start_time) * 1000, "\tHz: ", 1.0 / (time.time() - start_time))
+
+    except KeyboardInterrupt:
+        print("Test interrupted by user")
+    finally:
+        print("Test finished")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run", type=str, required=True, choices=["train", "test"])
+    parser.add_argument("--run", type=str, required=True, choices=["train", "test", "real"])
     parser.add_argument(
         "--run_name",
         type=str,
@@ -170,7 +207,7 @@ if __name__ == "__main__":
         "--ctrl_type",
         type=str,
         choices=["torque", "position"],
-        default="torque",
+        default="position",
         help="Whether the model should control the robot using torque or position control.",
     )
     parser.add_argument("--seed", type=int, default=0)
@@ -184,3 +221,7 @@ if __name__ == "__main__":
         if args.model_path is None:
             raise ValueError("--model_path is required for testing")
         test(args)
+    elif args.run == "real":
+        if args.model_path is None:
+            raise ValueError("--model_path is required for testing")
+        test_real(args)
