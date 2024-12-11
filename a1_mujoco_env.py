@@ -471,6 +471,29 @@ class Go1MujocoEnv(MujocoEnv):
             foot_contact_penalty = missing_feet * 0.1
             rewards -= foot_contact_penalty
 
+        dof_pos = self.data.qpos[7:] - self.model.key_qpos[0, 7:]  # 当前关节位置与默认值之差
+        FR_hip = dof_pos[0]
+        FL_hip = dof_pos[3]
+        RR_hip = dof_pos[6]
+        RL_hip = dof_pos[9]
+
+        # 计算左右对称腿hip关节角度的差值绝对值
+        front_hip_diff = abs(FR_hip - FL_hip)
+        rear_hip_diff = abs(RR_hip - RL_hip)
+
+        asym_threshold = 0.1
+        asym_penalty_scale = 0.1  # 每超过阈值0.1增加0.1的惩罚
+
+        front_penalty = max(0.0, front_hip_diff - asym_threshold) * asym_penalty_scale
+        rear_penalty = max(0.0, rear_hip_diff - asym_threshold) * asym_penalty_scale
+
+        # 合计不对称惩罚
+        asym_penalty = front_penalty + rear_penalty
+
+        # 对最终reward扣除不对称惩罚
+        if asym_penalty > 0:
+            rewards -= asym_penalty
+
         # print(f"ctrl_cost: {ctrl_cost}, action_rate_cost: {action_rate_cost}, vertical_vel_cost: {vertical_vel_cost}, xy_angular_vel_cost: {xy_angular_vel_cost}, joint_limit_cost: {joint_limit_cost}, joint_acceleration_cost: {joint_acceleration_cost}, orientation_cost: {orientation_cost}, default_joint_position_cost: {default_joint_position_cost}")
 
         reward = max(0.0, rewards - costs)
@@ -485,6 +508,42 @@ class Go1MujocoEnv(MujocoEnv):
         return reward, reward_info
 
     def _get_obs(self):
+        def _get_obs(self):
+            # The first three indices are the global x,y,z position of the trunk of the robot
+            # The second four are the quaternion representing the orientation of the robot
+            # The above seven values are ignored since they are privileged information
+            # The remaining 12 values are the joint positions
+            # The joint positions are relative to the starting position
+            dofs_position = self.data.qpos[7:].flatten() - self.model.key_qpos[0, 7:]
+
+            # The first three values are the global linear velocity of the robot
+            # The second three are the angular velocity of the robot
+            # The remaining 12 values are the joint velocities
+            velocity = self.data.qvel.flatten()
+            base_linear_velocity = velocity[:3]
+            base_angular_velocity = velocity[3:6]
+            dofs_velocity = velocity[6:]
+
+            desired_vel = self._desired_velocity
+            last_action = self._last_action
+            projected_gravity = self.projected_gravity
+
+            scaled_desired_vel = desired_vel * self.commands_scale
+
+            curr_obs = np.concatenate(
+                (
+                    base_linear_velocity * self._obs_scale["linear_velocity"],
+                    base_angular_velocity * self._obs_scale["angular_velocity"],
+                    projected_gravity,
+                    desired_vel * self._obs_scale["linear_velocity"],
+                    # scaled_desired_vel,
+                    dofs_position * self._obs_scale["dofs_position"],
+                    dofs_velocity * self._obs_scale["dofs_velocity"],
+                    last_action,
+                )
+            ).clip(-self._clip_obs_threshold, self._clip_obs_threshold)
+
+            return curr_obs
         # The first three indices are the global x,y,z position of the trunk of the robot
         # The second four are the quaternion representing the orientation of the robot
         # The above seven values are ignored since they are privileged information
