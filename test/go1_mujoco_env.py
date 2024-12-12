@@ -5,30 +5,21 @@ import mujoco
 
 import numpy as np
 from pathlib import Path
+from a1_robot_real import A1Robot
 
-
-# DEFAULT_CAMERA_CONFIG = {
-#     "azimuth": 90.0,
-#     "distance": 3.0,
-#     "elevation": -25.0,
-#     "lookat": np.array([0., 0., 0.]),
-#     "fixedcamid": 0,
-#     "trackbodyid": -1,
-#     "type": 2,
-# }
 
 DEFAULT_CAMERA_CONFIG = {
-    "azimuth": 90.0,              # 相机的初始水平角度（可调整）
-    "distance": 3.0,              # 相机与主体之间的距离
-    "elevation": -25.0,           # 相机的初始垂直角度（可调整）
-    "lookat": np.array([0., 0., 0.]),  # 设置为 (0, 0, 0)，后续在运行时动态调整
-    "fixedcamid": -1,             # 禁用固定相机
-    "trackbodyid": 0,             # 跟踪主体 ID (需要设置为狗的主体 ID)
-    "type": 1,                    # 设置为目标模式，允许绕主体旋转
+    "azimuth": 90.0,
+    "distance": 3.0,
+    "elevation": -25.0,
+    "lookat": np.array([0., 0., 0.]),
+    "fixedcamid": 0,
+    "trackbodyid": -1,
+    "type": 2,
 }
 
 
-class A1MujocoEnv(MujocoEnv):
+class Go1MujocoEnv(MujocoEnv):
     """Custom Environment that follows gym interface."""
 
     metadata = {
@@ -40,13 +31,12 @@ class A1MujocoEnv(MujocoEnv):
     }
 
     def __init__(self, ctrl_type="position", **kwargs):
-        # model_path = Path(f"./unitree_a1/unitree_a1_position.xml")
-        # model_path = Path(f"./unitree_go1/scene_{ctrl_type}.xml")
-        model_path = Path(f"./unitree_a1/unitree_a1_{ctrl_type}.xml")
+        # model_path = Path(f"./unitree_a1/a1_unitree.xml")
+        model_path = Path(f"../unitree_a1/unitree_a1_position.xml")
         MujocoEnv.__init__(
             self,
             model_path=model_path.absolute().as_posix(),
-            frame_skip=4,  # 125 Hz
+            frame_skip=10,  # Perform an action every 10 frames (dt(=0.002) * 10 = 0.02 seconds -> 50hz action rate)
             observation_space=None,  # Manually set afterwards
             default_camera_config=DEFAULT_CAMERA_CONFIG,
             **kwargs,
@@ -67,26 +57,22 @@ class A1MujocoEnv(MujocoEnv):
 
         # Weights for the reward and cost functions
         self.reward_weights = {
-            "linear_vel_tracking": 2.2,  # Was 1.0
-            "angular_vel_tracking": 1.1,
-            "healthy": 0.0,  # was 0.05
+            "linear_vel_tracking": 4.0,  # Was 1.0
+            "angular_vel_tracking": 2.0,
+            "healthy": 0.05,  # was 0.05
             "feet_airtime": 1.0,
         }
         self.cost_weights = {
             "torque": 0.0002,
-            "vertical_vel": 2.0,  # Was 1.0
+            "vertical_vel": 0.0,  # Was 1.0
             "xy_angular_vel": 0.05,  # Was 0.05
             "action_rate": 0.01,
-            "joint_limit": 10.0,
-            "joint_velocity": 0.01,
-            "joint_acceleration": 2.5e-7,
+            "joint_limit": 0.01,
+            "joint_velocity": 0.001,
+            "joint_acceleration": 2.5e-7, 
             "orientation": 1.0,
             "collision": 1.0,
-            "default_joint_position": 0.1,
-            "base_height": 0.0,
-            "termination": 0.0,
-            "stumble": 0.0,
-            "stand_still": 0.0,
+            "default_joint_position": 0.1
         }
 
         self._curriculum_base = 0.3
@@ -95,7 +81,7 @@ class A1MujocoEnv(MujocoEnv):
 
         # vx (m/s), vy (m/s), wz (rad/s)
         self._desired_velocity_min = np.array([0.5, -0.0, -0.0])
-        self._desired_velocity_max = np.array([0.5, 0.0, 0.0])
+        self._desired_velocity_max = np.array([1.0, 0.0, 0.0])
         self._desired_velocity = self._sample_desired_vel()  # [0.5, 0.0, 0.0]
         self._obs_scale = {
             "linear_velocity": 2.0,
@@ -103,11 +89,6 @@ class A1MujocoEnv(MujocoEnv):
             "dofs_position": 1.0,
             "dofs_velocity": 0.05,
         }
-        self.commands_scale = np.array([
-            self._obs_scale["linear_velocity"],
-            self._obs_scale["linear_velocity"],
-            self._obs_scale["angular_velocity"]
-        ])
         self._tracking_velocity_sigma = 0.25
 
         # Metrics used to determine if the episode should be terminated
@@ -121,7 +102,7 @@ class A1MujocoEnv(MujocoEnv):
         self._cfrc_ext_contact_indices = [2, 3, 5, 6, 8, 9, 11, 12]
 
         # Non-penalized degrees of freedom range of the control joints
-        dof_position_limit_multiplier = 0.9  # The % of the range that is not penalized
+        dof_position_limit_multiplier = 0.95  # The % of the range that is not penalized
         ctrl_range_offset = (
             0.5
             * (1 - dof_position_limit_multiplier)
@@ -141,11 +122,13 @@ class A1MujocoEnv(MujocoEnv):
         self._last_action = np.zeros(12)
 
         self._clip_obs_threshold = 100.0
-        self._max_contact_force = 100.0
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=self._get_obs().shape, dtype=np.float64
         )
 
+        # Feet site names to index mapping
+        # https://mujoco.readthedocs.io/en/stable/XMLreference.html#body-site
+        # https://mujoco.readthedocs.io/en/stable/APIreference/APItypes.html#mjtobj
         feet_site = [
             "FR",
             "FL",
@@ -167,9 +150,8 @@ class A1MujocoEnv(MujocoEnv):
 
         observation = self._get_obs()
         reward, reward_info = self._calc_reward(action)
+        # TODO: Consider terminating if knees touch the ground
         terminated = not self.is_healthy
-        ### TODO: Change Terminated condition
-        # terminated = self.check_termination()
         truncated = self._step >= (self._max_episode_time_sec / self.dt)
         info = {
             "x_position": self.data.qpos[0],
@@ -220,26 +202,6 @@ class A1MujocoEnv(MujocoEnv):
     def feet_contact_forces(self):
         feet_contact_forces = self.data.cfrc_ext[self._cfrc_ext_feet_indices]
         return np.linalg.norm(feet_contact_forces, axis=1)
-
-    # @property
-    # def feet_contact_forces(self):
-    #     # 输出 cfrc_ext 的全部内容
-    #     print("cfrc_ext:", self.data.cfrc_ext)
-    #     print("Feet indices:", self._cfrc_ext_feet_indices)
-    #
-    #     # 获取对应脚部索引的接触力
-    #     feet_contact_forces = self.data.cfrc_ext[self._cfrc_ext_feet_indices]
-    #
-    #     # 输出提取出的接触力
-    #     print("Feet contact forces (raw):", feet_contact_forces)
-    #
-    #     # 计算接触力的模长
-    #     norm_forces = np.linalg.norm(feet_contact_forces, axis=1)
-    #
-    #     # 输出最终结果
-    #     print("Feet contact forces (norm):", norm_forces)
-    #
-    #     return norm_forces
 
     ######### Positive Reward functions #########
     @property
@@ -350,49 +312,6 @@ class A1MujocoEnv(MujocoEnv):
     def curriculum_factor(self):
         return self._curriculum_base**0.997
 
-    ######################################################################################################
-    def check_termination(self):
-        """
-        Check if the environment needs to be reset based on contact forces.
-        """
-        # 获取所有刚体的接触力 (外部力)
-        contact_forces = self.data.cfrc_ext  # Shape: (nbody, 6), 6为力和力矩分量
-        # 计算每个刚体的接触力范数
-        contact_force_norms = np.linalg.norm(contact_forces[:, :3], axis=1)  # 只取力的 x, y, z 分量
-        # 设置接触力阈值，超过此值认为需要终止
-        termination_force_threshold = 1.0
-        # 检查是否任何刚体的接触力超过阈值
-        termination_condition = np.any(contact_force_norms > termination_force_threshold)
-        return termination_condition
-
-    @property
-    def height_penalty(self):
-        # Penalize base height away from the target height
-        base_height = self.data.qpos[2]
-        target_height = 0.3
-        return np.square(base_height - target_height)
-
-    @property
-    def termination_penalty(self):
-        # 如果需要终止，返回惩罚值，否则为0
-        return 1.0 if self.check_termination() else 0.0
-
-    @property
-    def stumble_penalty(self):
-        # Penalize feet hitting vertical surfaces
-        feet_force_xy = np.linalg.norm(self.data.cfrc_ext[self._cfrc_ext_feet_indices, :2], axis=1)  # 水平方向力
-        feet_force_z = np.abs(self.data.cfrc_ext[self._cfrc_ext_feet_indices, 2])  # 垂直方向力
-        return np.any(feet_force_xy > 5 * feet_force_z).astype(float)
-
-    @property
-    def stand_still_penalty(self):
-        # Penalize motion when the desired velocity is near zero
-        if np.linalg.norm(self._desired_velocity[:2]) < 0.1:  # 检查是否目标速度接近0
-            return np.sum(np.abs(self.data.qpos[7:] - self._default_joint_position))  # 惩罚关节偏移
-        return 0.0
-
-    ######################################################################################################
-
     def _calc_reward(self, action):
         # TODO: Add debug mode with custom Tensorboard calls for individual reward
         #   functions to get a better sense of the contribution of each reward function
@@ -417,6 +336,7 @@ class A1MujocoEnv(MujocoEnv):
             + healthy_reward
             + feet_air_time_reward
         )
+        #print(f"linear_vel_tracking_reward: {linear_vel_tracking_reward}, angular_vel_tracking_reward: {angular_vel_tracking_reward}, healthy_reward: {healthy_reward}, feet_air_time_reward: {feet_air_time_reward}")
 
         # Negative Costs
         ctrl_cost = self.torque_cost * self.cost_weights["torque"]
@@ -443,10 +363,7 @@ class A1MujocoEnv(MujocoEnv):
             * self.cost_weights["default_joint_position"]
         )
 
-        height_cost = self.height_penalty * self.cost_weights["base_height"]
-        termination_cost = self.termination_penalty * self.cost_weights["termination"]
-        stumble_cost = self.stumble_penalty * self.cost_weights["stumble"]
-        stand_still_cost = self.stand_still_penalty * self.cost_weights["stand_still"]
+        #print(f"ctrl_cost: {ctrl_cost}, action_rate_cost: {action_rate_cost}, vertical_vel_cost: {vertical_vel_cost}, xy_angular_vel_cost: {xy_angular_vel_cost}, joint_limit_cost: {joint_limit_cost}, joint_velocity_cost: {joint_velocity_cost}, joint_acceleration_cost: {joint_acceleration_cost}, orientation_cost: {orientation_cost}, collision_cost: {collision_cost}, default_joint_position_cost: {default_joint_position_cost}")
 
         costs = (
             ctrl_cost
@@ -457,44 +374,7 @@ class A1MujocoEnv(MujocoEnv):
             + joint_acceleration_cost
             + orientation_cost
             + default_joint_position_cost
-            # + collision_cost
-            + height_cost
-            + termination_cost
-            + stumble_cost
-            + stand_still_cost
         )
-
-        num_contacts = np.sum(self.feet_contact_forces > 0.5)
-        missing_feet = 4 - num_contacts  # 少于4条腿接触地面条数
-        if missing_feet > 0:
-            # 为每条未接触地面的腿添加惩罚，比如每缺一条腿，减少0.2奖励
-            foot_contact_penalty = missing_feet * 0.1
-            rewards -= foot_contact_penalty
-
-        dof_pos = self.data.qpos[7:] - self.model.key_qpos[0, 7:]  # 当前关节位置与默认值之差
-        FR_hip = dof_pos[0]
-        FL_hip = dof_pos[3]
-        RR_hip = dof_pos[6]
-        RL_hip = dof_pos[9]
-
-        # 计算左右对称腿hip关节角度的差值绝对值
-        front_hip_diff = abs(FR_hip - FL_hip)
-        rear_hip_diff = abs(RR_hip - RL_hip)
-
-        asym_threshold = 0.1
-        asym_penalty_scale = 0.1  # 每超过阈值0.1增加0.1的惩罚
-
-        front_penalty = max(0.0, front_hip_diff - asym_threshold) * asym_penalty_scale
-        rear_penalty = max(0.0, rear_hip_diff - asym_threshold) * asym_penalty_scale
-
-        # 合计不对称惩罚
-        asym_penalty = front_penalty + rear_penalty
-
-        # 对最终reward扣除不对称惩罚
-        if asym_penalty > 0:
-            rewards -= asym_penalty
-
-        # print(f"ctrl_cost: {ctrl_cost}, action_rate_cost: {action_rate_cost}, vertical_vel_cost: {vertical_vel_cost}, xy_angular_vel_cost: {xy_angular_vel_cost}, joint_limit_cost: {joint_limit_cost}, joint_acceleration_cost: {joint_acceleration_cost}, orientation_cost: {orientation_cost}, default_joint_position_cost: {default_joint_position_cost}")
 
         reward = max(0.0, rewards - costs)
         # reward = rewards - self.curriculum_factor * costs
@@ -504,46 +384,10 @@ class A1MujocoEnv(MujocoEnv):
             "reward_survive": healthy_reward,
         }
 
-        # print(f"reward: {reward}, rewards: {rewards}, costs: {costs}")
+        #print(f"reward: {reward}, rewards: {rewards}, costs: {costs}")
         return reward, reward_info
 
     def _get_obs(self):
-        def _get_obs(self):
-            # The first three indices are the global x,y,z position of the trunk of the robot
-            # The second four are the quaternion representing the orientation of the robot
-            # The above seven values are ignored since they are privileged information
-            # The remaining 12 values are the joint positions
-            # The joint positions are relative to the starting position
-            dofs_position = self.data.qpos[7:].flatten() - self.model.key_qpos[0, 7:]
-
-            # The first three values are the global linear velocity of the robot
-            # The second three are the angular velocity of the robot
-            # The remaining 12 values are the joint velocities
-            velocity = self.data.qvel.flatten()
-            base_linear_velocity = velocity[:3]
-            base_angular_velocity = velocity[3:6]
-            dofs_velocity = velocity[6:]
-
-            desired_vel = self._desired_velocity
-            last_action = self._last_action
-            projected_gravity = self.projected_gravity
-
-            scaled_desired_vel = desired_vel * self.commands_scale
-
-            curr_obs = np.concatenate(
-                (
-                    base_linear_velocity * self._obs_scale["linear_velocity"],
-                    base_angular_velocity * self._obs_scale["angular_velocity"],
-                    projected_gravity,
-                    desired_vel * self._obs_scale["linear_velocity"],
-                    # scaled_desired_vel,
-                    dofs_position * self._obs_scale["dofs_position"],
-                    dofs_velocity * self._obs_scale["dofs_velocity"],
-                    last_action,
-                )
-            ).clip(-self._clip_obs_threshold, self._clip_obs_threshold)
-
-            return curr_obs
         # The first three indices are the global x,y,z position of the trunk of the robot
         # The second four are the quaternion representing the orientation of the robot
         # The above seven values are ignored since they are privileged information
@@ -563,15 +407,12 @@ class A1MujocoEnv(MujocoEnv):
         last_action = self._last_action
         projected_gravity = self.projected_gravity
 
-        scaled_desired_vel = desired_vel * self.commands_scale
-
         curr_obs = np.concatenate(
             (
                 base_linear_velocity * self._obs_scale["linear_velocity"],
                 base_angular_velocity * self._obs_scale["angular_velocity"],
                 projected_gravity,
                 desired_vel * self._obs_scale["linear_velocity"],
-                # scaled_desired_vel,
                 dofs_position * self._obs_scale["dofs_position"],
                 dofs_velocity * self._obs_scale["dofs_velocity"],
                 last_action,
